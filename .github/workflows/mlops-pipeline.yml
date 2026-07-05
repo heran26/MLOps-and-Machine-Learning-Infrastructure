@@ -46,25 +46,12 @@ jobs:
           git add models/production_model.pkl models/production_metrics.json
           git commit -m "Auto-promote model, test accuracy=${{ steps.eval.outputs.accuracy }}" || echo "Nothing to commit"
           git push
+          # Pushing to main is the deploy trigger: Render is connected to this repo
+          # and auto-builds + redeploys whenever main changes. Since this push only
+          # happens when deploy=='true', Render only ever redeploys an improved model.
 
-      - name: Copy model + app to server
-        if: steps.eval.outputs.deploy == 'true'
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "models/production_model.pkl,serving/app.py,requirements.txt"
-          target: "/home/${{ secrets.SSH_USER }}/ml-app"
-
-      - name: Restart serving process on server
-        if: steps.eval.outputs.deploy == 'true'
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            cd /home/${{ secrets.SSH_USER }}/ml-app
-            pip install -r requirements.txt --quiet
-            sudo systemctl restart ml-app.service
+      - name: Ping Render deploy hook (optional, speeds things up)
+        if: steps.eval.outputs.deploy == 'true' && env.RENDER_DEPLOY_HOOK_URL != ''
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: curl -X POST "$RENDER_DEPLOY_HOOK_URL"
