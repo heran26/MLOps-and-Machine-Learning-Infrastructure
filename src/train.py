@@ -13,7 +13,7 @@ GitHub Actions runner -- same script, same result, no local PC required.
 import json
 import os
 import joblib
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score
 
@@ -31,11 +31,8 @@ def main():
 
     pipeline = Pipeline([
         ("preprocessor", build_preprocessor()),
-        ("model", RandomForestClassifier(
-            n_estimators=500,
-            max_depth=None,
-            min_samples_leaf=2,
-            n_jobs=-1,
+        ("model", GradientBoostingClassifier(
+            n_estimators=200,
             random_state=RANDOM_STATE,
         )),
     ])
