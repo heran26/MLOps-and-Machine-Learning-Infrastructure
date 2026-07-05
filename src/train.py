@@ -32,7 +32,7 @@ def main():
     pipeline = Pipeline([
         ("preprocessor", build_preprocessor()),
         ("model", RandomForestClassifier(
-            n_estimators=300,
+            n_estimators=500,
             max_depth=None,
             min_samples_leaf=2,
             n_jobs=-1,
