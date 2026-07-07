@@ -87,58 +87,47 @@ uvicorn app:app --reload --port 8000
 Once `train.py` is committed, the automated pipeline uses it going forward -- no need to
 run anything in Colab again unless you're experimenting with something new.
 
-## 3. Set up the cloud server (where the model gets deployed to)
+**This entire section is optional.** If your GitHub Actions pipeline is already training,
+evaluating, promoting, and deploying successfully (check the Actions tab), you do not need
+to touch Colab at all -- it exists purely as a tool for experimenting with bigger models or
+GPU-accelerated training before committing a final `train.py`.
 
-Any small VPS works (DigitalOcean, Linode, a free-tier AWS/GCP VM, etc.). On the server:
+## 3. Deployment target: Render (this is what's actually set up)
 
-```bash
-sudo apt update && sudo apt install -y python3-pip python3-venv
-mkdir -p ~/ml-app/models
-cd ~/ml-app
-python3 -m venv venv
-source venv/bin/activate
-pip install fastapi uvicorn scikit-learn pandas joblib pydantic
-```
+This project deploys to **Render.com's free web service tier** -- no VPS, no SSH, no
+systemd. Render is connected directly to this GitHub repo and auto-deploys whenever `main`
+changes.
 
-Create a systemd service so the API survives reboots/crashes -- `/etc/systemd/system/ml-app.service`:
+Setup (already done if you followed along, documented here for reference / rebuilding):
+1. render.com > **New > Web Service** > connect this GitHub repo.
+2. Root Directory: blank (repo root). Build Command: `pip install -r requirements.txt`.
+   Start Command: `uvicorn serving.app:app --host 0.0.0.0 --port $PORT`. Instance: Free.
+3. A `.python-version` file (`3.11.10`) is committed at the repo root -- Render reads this
+   to avoid defaulting to an unsupported Python version.
+4. Auto-Deploy must be set to **On Commit** in the service's Settings > Build & Deploy
+   (not "After CI Checks Pass" -- promotion commits from the pipeline don't carry a CI
+   check of their own, so that mode would silently never deploy).
+5. If deploys don't trigger on push, check that Render's GitHub App has access to this
+   specific repo at github.com/apps/render/installations/new.
 
-```ini
-[Unit]
-Description=ML Inference API
-After=network.target
+No GitHub secrets are needed for deployment itself -- Render watches the repo on its own.
+The optional `RENDER_DEPLOY_HOOK_URL` secret (used in the workflow's last step) just makes
+the redeploy fire a few seconds faster; everything works without it too.
 
-[Service]
-User=<your-ssh-user>
-WorkingDirectory=/home/<your-ssh-user>/ml-app
-ExecStart=/home/<your-ssh-user>/ml-app/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable ml-app.service
-sudo systemctl start ml-app.service
-```
-
-Do one manual first deploy so `models/production_model.pkl` and `serving/app.py` exist on
-the server before the pipeline tries to restart the service.
+Free tier note: the service spins down after ~15 min idle; the first request after that
+takes 30-50 seconds to wake back up. That's expected, not a bug.
 
 ## 4. GitHub repo secrets
 
-In your GitHub repo: **Settings > Secrets and variables > Actions > New repository secret**
+None are required for the current Render-based setup. The model-promotion commit step
+uses the built-in `GITHUB_TOKEN` (available automatically to every workflow run), enabled
+by `permissions: contents: write` in the workflow file.
 
-| Secret name        | Value                                                    |
-|---------------------|-----------------------------------------------------------|
-| `SSH_HOST`          | server IP or hostname                                    |
-| `SSH_USER`          | SSH username on the server                                |
-| `SSH_PRIVATE_KEY`   | private key that matches a public key in the server's `~/.ssh/authorized_keys` |
+The only optional secret:
 
-No secret is needed for the git commit-back step -- the built-in `GITHUB_TOKEN` (available
-automatically to every workflow) handles that, since `permissions: contents: write` is set
-in the workflow file.
+| Secret name              | Value                                              |
+|---------------------------|-----------------------------------------------------|
+| `RENDER_DEPLOY_HOOK_URL`  | from Render service > Settings > Deploy Hook (optional, speeds up redeploys) |
 
 ## 5. Run it
 
@@ -160,12 +149,95 @@ real to run against out of the box. For your own accuracy needs:
 - The promotion gate in `evaluate.py` already guarantees the pipeline never regresses --
   every deploy is measured on the same held-out data as every model before it.
 
-## 7. Extending to monitoring
+## 7. Real-time drift and bias monitoring
 
-Natural next additions once this is running:
-- Log every `/predict` request/response in `app.py` to a file or database.
-- A scheduled job comparing recent live prediction distributions to training-data
-  distributions (data drift).
-- Alerting (Slack/email) on the workflow's success/failure via GitHub Actions notifications.
+This is the second half of the project: a scheduled job that watches live traffic on the
+deployed API, checks it against the training-time data distribution, checks fairness across
+sensitive groups, and automatically re-triggers the retraining pipeline if something looks
+wrong. It's the more research-relevant half -- see the docstring in `monitoring/drift_check.py`
+for the methodology and citations (Population Stability Index; the four-fifths fairness rule).
 
-Ask if you want any of these built out next.
+### How it fits together
+
+- `serving/app.py` logs every `/predict` call in memory (features + output + timestamp),
+  exposed at `GET /monitoring/raw-data` (API-key protected).
+- `monitoring/drift_check.py` (run on a schedule by GitHub Actions) fetches that log,
+  computes PSI per feature against `models/reference_stats.json` (built during training),
+  checks the four-fifths rule across `sex` and `race`, saves a timestamped report under
+  `monitoring/history/`, POSTs the latest report to the API, and -- if either check fails --
+  calls the GitHub API to re-run `mlops-pipeline.yml`.
+- `GET /dashboard` on your deployed API renders the latest report as a live page.
+
+**Important limitation to know and be able to explain**: the prediction log lives in memory
+on the Render instance, so it resets whenever the service restarts, redeploys, or spins down
+from inactivity (free tier). This is fine for demonstrating the mechanism end-to-end, but a
+production system would persist this to a real database. Worth stating as a known limitation
+if you discuss this project, not something to hide.
+
+### Setup
+
+1. **Set an API key** so your monitoring endpoints aren't public to anyone who finds the URL:
+   - Pick any random string, e.g. generate one with:
+     ```powershell
+     python -c "import secrets; print(secrets.token_hex(16))"
+     ```
+   - Render dashboard > your service > **Environment** > add `MONITOR_API_KEY` = that value.
+   - GitHub repo > **Settings > Secrets and variables > Actions** > add secret
+     `MONITOR_API_KEY` = the same value.
+
+2. **Tell the monitor where your API lives**:
+   - GitHub repo secrets > add `API_BASE_URL` = `https://ml-income-api.onrender.com`
+     (your actual Render URL, no trailing slash).
+
+3. Push everything (`monitoring/`, updated `.github/workflows/`, updated `app.py`,
+   `train.py`, `evaluate.py`) to GitHub, and let the existing `mlops-pipeline.yml` run once
+   (manually trigger it from the Actions tab) so `models/reference_stats.json` gets created
+   and committed -- the drift checker needs this file to exist in the repo.
+
+### Generate demo traffic (do this to actually see it work)
+
+A brand-new deploy has zero logged predictions, so there's nothing to analyze yet. From your
+machine:
+
+```powershell
+cd C:\Users\Intel\Downloads\ml-cicd-project\ml-cicd-project
+pip install requests
+python monitoring/simulate_traffic.py --url https://ml-income-api.onrender.com --mode normal --n 100
+```
+
+Then run the drift check once manually to confirm it reports "OK":
+```powershell
+$env:API_BASE_URL = "https://ml-income-api.onrender.com"
+$env:MONITOR_API_KEY = "<the key you set above>"
+python monitoring/drift_check.py
+```
+
+Now prove it actually catches a real shift:
+```powershell
+python monitoring/simulate_traffic.py --url https://ml-income-api.onrender.com --mode shifted --n 150
+python monitoring/drift_check.py
+```
+You should see one or more features with PSI above 0.25 and `"alert": true` in the printed
+report, and (if `GITHUB_TOKEN`/`GITHUB_REPOSITORY` are set -- true automatically when this
+runs inside GitHub Actions) the retraining pipeline gets triggered automatically.
+
+### View the live dashboard
+
+```
+https://ml-income-api.onrender.com/dashboard
+```
+
+### Turn on the schedule
+
+`drift-monitor.yml` already runs every 6 hours (`cron: "0 */6 * * *"`) with no further setup
+needed once the two secrets above are in place. Adjust the cron expression to match your
+expected traffic volume -- checking every 6 hours is arbitrary and easy to change.
+
+### For your research write-up
+
+Worth explicitly stating if you present this project: PSI and the four-fifths rule are
+simple, interpretable screens, not a complete fairness or drift audit. Natural extensions to
+mention as future work: calibration/equalized-odds fairness metrics, a proper drift test
+(e.g. Kolmogorov-Smirnov per feature with multiple-testing correction), and persistent
+storage for the prediction log so drift can be tracked over long time windows rather than
+just "since the last restart."

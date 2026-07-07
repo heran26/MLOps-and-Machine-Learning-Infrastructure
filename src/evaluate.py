@@ -18,8 +18,10 @@ from preprocess import load_and_split
 
 MODELS_DIR = "../models"
 CANDIDATE_MODEL = os.path.join(MODELS_DIR, "candidate_model.pkl")
+CANDIDATE_REFERENCE_STATS = os.path.join(MODELS_DIR, "candidate_reference_stats.json")
 PRODUCTION_MODEL = os.path.join(MODELS_DIR, "production_model.pkl")
 PRODUCTION_METRICS = os.path.join(MODELS_DIR, "production_metrics.json")
+PRODUCTION_REFERENCE_STATS = os.path.join(MODELS_DIR, "reference_stats.json")
 
 
 def set_github_output(name: str, value: str):
@@ -53,6 +55,7 @@ def main():
     if deploy:
         print("Candidate IMPROVES on production -> promoting candidate to production.")
         shutil.copyfile(CANDIDATE_MODEL, PRODUCTION_MODEL)
+        shutil.copyfile(CANDIDATE_REFERENCE_STATS, PRODUCTION_REFERENCE_STATS)
         with open(PRODUCTION_METRICS, "w") as f:
             json.dump({"test_accuracy": candidate_acc, "test_f1": candidate_f1}, f, indent=2)
     else:
