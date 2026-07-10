@@ -1,0 +1,51 @@
+{
+  "timestamp": "2026-07-10T14:05:59.079943+00:00",
+  "n_samples": 94,
+  "feature_psi": {
+    "age": 0.23086611469143078,
+    "fnlwgt": 1.4074254425289596,
+    "education_num": 2.1758378475548605,
+    "capital_gain": 0.0,
+    "capital_loss": 0.0,
+    "hours_per_week": 2.8388728983021494,
+    "workclass": 2.1100986272889224,
+    "education": 2.219581857745225,
+    "marital_status": 0.8856852113337019,
+    "occupation": 4.107823317182511,
+    "relationship": 0.6742954417211369,
+    "race": 1.7712149220115672,
+    "sex": 0.21782220564462196,
+    "native_country": 3.369061418846163
+  },
+  "max_psi": 4.107823317182511,
+  "drift_flag": true,
+  "bias": {
+    "selection_rates": {
+      "sex": {
+        "Female": 0.34615384615384615,
+        "Male": 0.2619047619047619
+      },
+      "race": {
+        "Asian-Pac-Islander": 0.34285714285714286,
+        "Black": 0.25,
+        "White": 0.3225806451612903
+      }
+    },
+    "flagged_groups": [
+      {
+        "attribute": "sex",
+        "group": "Male",
+        "selection_rate": 0.2619047619047619,
+        "ratio_to_max_group": 0.7566137566137566
+      },
+      {
+        "attribute": "race",
+        "group": "Black",
+        "selection_rate": 0.25,
+        "ratio_to_max_group": 0.7291666666666666
+      }
+    ],
+    "bias_flag": true
+  },
+  "alert": true
+}
